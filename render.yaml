@@ -19,10 +19,12 @@ services:
         sync: false
 
   # -------------------------------------------------------------
-  # 2. React + Vite Frontend (Free Static Site)
+  # 2. React + Vite Frontend (Static Site)
+  # Note: type is 'web' with runtime 'static' and NO plan field
   # -------------------------------------------------------------
-  - type: static
+  - type: web
     name: yourtripy-frontend
+    runtime: static
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
     routes:
