@@ -1,13 +1,13 @@
 services:
   # -------------------------------------------------------------
-  # 1. Java Spring Boot Backend (Free Web Service)
+  # 1. Java Spring Boot Backend (Free Web Service - Docker)
   # -------------------------------------------------------------
   - type: web
     name: yourtripy-backend
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    region: singapore # Close to India (ap-south-1)
+    region: singapore
     envVars:
       - key: PORT
         value: 8080
@@ -16,15 +16,13 @@ services:
       - key: SPRING_DATASOURCE_USERNAME
         value: postgres
       - key: SPRING_DATASOURCE_PASSWORD
-        sync: false # Set securely in Render dashboard
+        sync: false
 
   # -------------------------------------------------------------
   # 2. React + Vite Frontend (Free Static Site)
   # -------------------------------------------------------------
-  - type: web
+  - type: static
     name: yourtripy-frontend
-    runtime: static
-    plan: free
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
     routes:
