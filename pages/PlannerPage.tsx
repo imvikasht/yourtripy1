@@ -115,10 +115,239 @@ const PREFERENCE_CATEGORIES = [
 
 const ALL_PREFERENCES = PREFERENCE_CATEGORIES.flatMap(cat => cat.items);
 
-const createFallbackTrip = (destination: string, days: number, travelStyle: string, preferences: string[]): TripPlan => {
+interface Coordinates {
+  lat: number;
+  lng: number;
+}
+
+interface LocationSuggestion {
+  displayName: string;
+  lat: number;
+  lng: number;
+}
+
+const DEFAULT_DELHI_COORDS: Coordinates = { lat: 28.6139, lng: 77.2090 };
+
+const KNOWN_DESTINATION_COORDS: Record<string, Coordinates> = {
+  'goa': { lat: 15.2993, lng: 74.1240 },
+  'mumbai': { lat: 19.0760, lng: 72.8777 },
+  'delhi': { lat: 28.6139, lng: 77.2090 },
+  'new delhi': { lat: 28.6139, lng: 77.2090 },
+  'jaipur': { lat: 26.9124, lng: 75.7873 },
+  'udaipur': { lat: 24.5854, lng: 73.7125 },
+  'manali': { lat: 32.2432, lng: 77.1892 },
+  'shimla': { lat: 31.1048, lng: 77.1734 },
+  'rishikesh': { lat: 30.0869, lng: 78.2676 },
+  'varanasi': { lat: 25.3176, lng: 82.9739 },
+  'agra': { lat: 27.1767, lng: 78.0081 },
+  'bengaluru': { lat: 12.9716, lng: 77.5946 },
+  'bangalore': { lat: 12.9716, lng: 77.5946 },
+  'kochi': { lat: 9.9312, lng: 76.2673 },
+  'kerala': { lat: 10.8505, lng: 76.2711 },
+  'munnar': { lat: 10.0889, lng: 77.0595 },
+  'darjeeling': { lat: 27.0410, lng: 88.2663 },
+  'leh': { lat: 34.1526, lng: 77.5771 },
+  'ladakh': { lat: 34.1526, lng: 77.5771 },
+  'ooty': { lat: 11.4102, lng: 76.6950 },
+  'pondicherry': { lat: 11.9416, lng: 79.8083 },
+  'puducherry': { lat: 11.9416, lng: 79.8083 },
+  'kolkata': { lat: 22.5726, lng: 88.3639 },
+  'chennai': { lat: 13.0827, lng: 80.2707 },
+  'hyderabad': { lat: 17.3850, lng: 78.4867 },
+  'pune': { lat: 18.5204, lng: 73.8567 },
+  'ahmedabad': { lat: 23.0225, lng: 72.5714 },
+  'amritsar': { lat: 31.6340, lng: 74.8723 },
+  'srinagar': { lat: 34.0837, lng: 74.7973 },
+  'kashmir': { lat: 34.0837, lng: 74.7973 },
+  'andaman': { lat: 11.7401, lng: 92.6586 },
+  'paris': { lat: 48.8566, lng: 2.3522 },
+  'london': { lat: 51.5072, lng: -0.1276 },
+  'tokyo': { lat: 35.6762, lng: 139.6503 },
+  'kyoto': { lat: 35.0116, lng: 135.7681 },
+  'bali': { lat: -8.3405, lng: 115.0920 },
+  'dubai': { lat: 25.2048, lng: 55.2708 },
+  'singapore': { lat: 1.3521, lng: 103.8198 },
+  'new york': { lat: 40.7128, lng: -74.0060 },
+  'bangkok': { lat: 13.7563, lng: 100.5018 },
+  'rome': { lat: 41.9028, lng: 12.4964 },
+  'zurich': { lat: 47.3769, lng: 8.5417 },
+  'switzerland': { lat: 46.8182, lng: 8.2275 },
+  'maldives': { lat: 3.2028, lng: 73.2207 },
+  'vietnam': { lat: 21.0278, lng: 105.8342 },
+  'hanoi': { lat: 21.0278, lng: 105.8342 },
+  'seoul': { lat: 37.5665, lng: 126.9780 },
+  'istanbul': { lat: 41.0082, lng: 28.9784 },
+  'barcelona': { lat: 41.3874, lng: 2.1686 },
+  'amsterdam': { lat: 52.3676, lng: 4.9041 },
+  'sydney': { lat: -33.8688, lng: 151.2093 },
+};
+
+const isValidCoord = (coords?: { lat?: number; lng?: number } | null): coords is Coordinates => {
+  if (!coords) return false;
+  const lat = Number(coords.lat);
+  const lng = Number(coords.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  return Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+};
+
+const haversineKm = (a: Coordinates, b: Coordinates): number => {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+const geocodeCache = new Map<string, Coordinates | null>();
+
+const lookupKnownDestination = (query: string): Coordinates | null => {
+  const normalized = query.toLowerCase().trim();
+  if (KNOWN_DESTINATION_COORDS[normalized]) {
+    return KNOWN_DESTINATION_COORDS[normalized];
+  }
+  const firstSegment = normalized.split(',')[0].trim();
+  if (KNOWN_DESTINATION_COORDS[firstSegment]) {
+    return KNOWN_DESTINATION_COORDS[firstSegment];
+  }
+  for (const [key, coords] of Object.entries(KNOWN_DESTINATION_COORDS)) {
+    const regex = new RegExp(`\\b${key}\\b`, 'i');
+    if (regex.test(normalized)) {
+      return coords;
+    }
+  }
+  return null;
+};
+
+const fetchNominatimCoords = async (query: string): Promise<Coordinates | null> => {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+  if (geocodeCache.has(trimmed.toLowerCase())) {
+    return geocodeCache.get(trimmed.toLowerCase()) || null;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trimmed)}&limit=1`,
+      { signal: controller.signal }
+    );
+    const data = await response.json();
+    if (Array.isArray(data) && data.length > 0) {
+      const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      if (isValidCoord(coords)) {
+        geocodeCache.set(trimmed.toLowerCase(), coords);
+        return coords;
+      }
+    }
+  } catch {
+    // Network/timeout errors fall through to simpler queries or known coordinates
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  geocodeCache.set(trimmed.toLowerCase(), null);
+  return null;
+};
+
+const geocodeLocation = async (query: string): Promise<Coordinates | null> => {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  const direct = await fetchNominatimCoords(trimmed);
+  if (direct) return direct;
+
+  if (trimmed.includes(',')) {
+    const primaryPart = trimmed.split(',')[0].trim();
+    const fallback = await fetchNominatimCoords(primaryPart);
+    if (fallback) return fallback;
+  }
+
+  return lookupKnownDestination(trimmed);
+};
+
+const isSuspiciousDefaultDelhi = (coords: Coordinates, destination: string, destCoords: Coordinates | null): boolean => {
+  if (destination.toLowerCase().includes('delhi')) return false;
+  const nearDefaultDelhi = haversineKm(coords, DEFAULT_DELHI_COORDS) < 15;
+  if (!nearDefaultDelhi) return false;
+  if (!destCoords) return true;
+  return haversineKm(destCoords, DEFAULT_DELHI_COORDS) > 80;
+};
+
+const resolveTripCoordinates = async (
+  plan: TripPlan,
+  destination: string,
+  destCoords: Coordinates | null
+): Promise<TripPlan> => {
+  const baseCenter = destCoords || (await geocodeLocation(destination));
+  if (!plan.days || plan.days.length === 0) return plan;
+
+  const updatedDays = await Promise.all(
+    plan.days.map(async (day, dayIdx) => {
+      const activities = await Promise.all(
+        (day.activities || []).map(async (act, actIdx) => {
+          const rawCoords = act.coordinates
+            ? { lat: Number(act.coordinates.lat), lng: Number(act.coordinates.lng) }
+            : null;
+          const valid = isValidCoord(rawCoords);
+          const suspiciousDelhi = valid && isSuspiciousDefaultDelhi(rawCoords, destination, baseCenter);
+          const farFromDestination =
+            valid && baseCenter ? haversineKm(rawCoords, baseCenter) > 1500 : false;
+
+          if (valid && !suspiciousDelhi && !farFromDestination) {
+            return { ...act, coordinates: rawCoords };
+          }
+
+          const placeQuery = act.location
+            ? `${act.location}, ${destination}`
+            : `${act.title}, ${destination}`;
+          const geocodedPlace = await fetchNominatimCoords(placeQuery);
+          if (
+            geocodedPlace &&
+            (!baseCenter || haversineKm(geocodedPlace, baseCenter) <= 1500) &&
+            !isSuspiciousDefaultDelhi(geocodedPlace, destination, baseCenter)
+          ) {
+            return { ...act, coordinates: geocodedPlace };
+          }
+
+          if (baseCenter) {
+            const latOffset = (dayIdx * 0.008) + ((actIdx - 1) * 0.006);
+            const lngOffset = (dayIdx * 0.008) + ((actIdx % 2 === 0 ? 1 : -1) * 0.006);
+            return {
+              ...act,
+              coordinates: {
+                lat: Number((baseCenter.lat + latOffset).toFixed(6)),
+                lng: Number((baseCenter.lng + lngOffset).toFixed(6))
+              }
+            };
+          }
+
+          return act;
+        })
+      );
+      return { ...day, activities };
+    })
+  );
+
+  return { ...plan, days: updatedDays };
+};
+
+const createFallbackTrip = (
+  destination: string,
+  days: number,
+  travelStyle: string,
+  preferences: string[],
+  centerCoords?: Coordinates | null
+): TripPlan => {
   const destName = destination || 'Goa';
   const totalDays = Math.max(1, Math.min(days || 3, 10));
   const style = travelStyle || 'Moderate';
+  const base = centerCoords || lookupKnownDestination(destName) || DEFAULT_DELHI_COORDS;
   
   const sampleActivities: Activity[] = [
     {
@@ -133,7 +362,7 @@ const createFallbackTrip = (destination: string, days: number, travelStyle: stri
       tips: ['Arrive early to avoid afternoon crowds', 'Carry drinking water and camera'],
       bestTimeToVisit: 'Morning 9:00 AM - 11:30 AM',
       imageUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80',
-      coordinates: { lat: 28.6139, lng: 77.2090 },
+      coordinates: { lat: base.lat, lng: base.lng },
       travelTimeFromPrevious: 'Starting Point',
       nearbyFood: [{ name: 'Heritage Bistro', rating: 4.8 }, { name: 'Local Flavors Cafe', rating: 4.6 }]
     },
@@ -149,7 +378,7 @@ const createFallbackTrip = (destination: string, days: number, travelStyle: stri
       tips: ['Try the signature house special', 'Vegetarian options widely available'],
       bestTimeToVisit: '1:00 PM - 2:30 PM',
       imageUrl: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80',
-      coordinates: { lat: 28.6200, lng: 77.2150 },
+      coordinates: { lat: base.lat + 0.0061, lng: base.lng + 0.0060 },
       travelTimeFromPrevious: '15 mins cab ride',
       nearbyFood: [{ name: 'Royal Spice House', rating: 4.9 }]
     },
@@ -165,7 +394,7 @@ const createFallbackTrip = (destination: string, days: number, travelStyle: stri
       tips: ['Sunset view is best around 5:45 PM', 'Bargaining at artisan stalls is common'],
       bestTimeToVisit: '4:30 PM - 6:30 PM',
       imageUrl: 'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=800&q=80',
-      coordinates: { lat: 28.6280, lng: 77.2200 },
+      coordinates: { lat: base.lat + 0.0141, lng: base.lng + 0.0110 },
       travelTimeFromPrevious: '20 mins transit',
       nearbyFood: [{ name: 'Sunset Lounge', rating: 4.7 }]
     }
@@ -238,7 +467,8 @@ const PlannerPage: React.FC<PlannerPageProps> = ({ initialQuery, tripId, navigat
     selectedPrefs: [] as string[]
   });
 
-  const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
+  const [locationSuggestions, setLocationSuggestions] = useState<LocationSuggestion[]>([]);
+  const [selectedDestCoords, setSelectedDestCoords] = useState<Coordinates | null>(null);
   const [isSearchingLocations, setIsSearchingLocations] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -260,7 +490,13 @@ const PlannerPage: React.FC<PlannerPageProps> = ({ initialQuery, tripId, navigat
       // Added addressdetails=1 and bounded=1 to improve search accuracy
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(input)}&addressdetails=1&limit=5&polygon_geojson=0&dedupe=1`);
       const data = await response.json();
-      const suggestions = data.map((item: any) => item.display_name);
+      const suggestions: LocationSuggestion[] = (Array.isArray(data) ? data : [])
+        .map((item: any) => ({
+          displayName: item.display_name,
+          lat: parseFloat(item.lat),
+          lng: parseFloat(item.lon)
+        }))
+        .filter((item: LocationSuggestion) => Boolean(item.displayName) && isValidCoord(item));
       setLocationSuggestions(suggestions);
     } catch (error) {
       console.error("Error fetching suggestions:", error);
@@ -303,7 +539,10 @@ const PlannerPage: React.FC<PlannerPageProps> = ({ initialQuery, tripId, navigat
             totalEstimate: '₹0'
           }
         };
-        setTripPlan(plan);
+        const resolvedPlan = plan.tripSummary.destination
+          ? await resolveTripCoordinates(plan, plan.tripSummary.destination, null)
+          : plan;
+        setTripPlan(resolvedPlan);
         setActiveDay('overview');
       } else {
         alert("Trip not found.");
@@ -316,12 +555,17 @@ const PlannerPage: React.FC<PlannerPageProps> = ({ initialQuery, tripId, navigat
     }
   };
 
-  const generateAITrip = async (params: { destination: string, days: number, travelStyle: string, budgetAmount?: string, preferences: string[] }) => {
-    const { destination, days, travelStyle, budgetAmount, preferences } = params;
+  const generateAITrip = async (params: { destination: string, days: number, travelStyle: string, budgetAmount?: string, preferences: string[], coords?: Coordinates | null }) => {
+    const { destination, days, travelStyle, budgetAmount, preferences, coords } = params;
     if (!destination) return;
     
     setIsLoading(true);
     setShowForm(false);
+
+    const geocodePromise: Promise<Coordinates | null> = isValidCoord(coords)
+      ? Promise.resolve(coords)
+      : geocodeLocation(destination);
+
     try {
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
       if (!apiKey) {
@@ -333,6 +577,7 @@ const PlannerPage: React.FC<PlannerPageProps> = ({ initialQuery, tripId, navigat
       
       const prompt = `You are an expert AI Travel Planning Engine.
 All currency values MUST be in Indian Rupees (INR) using the ₹ symbol.
+CRITICAL: For EVERY activity in "days", "coordinates" MUST contain the real-world geographic latitude ("lat") and longitude ("lng") of that specific landmark/place in ${destination}. Never leave coordinates as 0 or copy example numbers.
 
 Given destination: ${destination}, days: ${days}, style: ${travelStyle}, ${budgetString}, ${prefString}, generate a COMPLETE, PRACTICAL, and HIGHLY OPTIMIZED travel plan.
 
@@ -380,7 +625,7 @@ Output ONLY valid JSON matching this schema:
           "tips": ["string"],
           "bestTimeToVisit": "Morning",
           "imageUrl": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80",
-          "coordinates": { "lat": 28.6139, "lng": 77.2090 },
+          "coordinates": { "lat": 0.0, "lng": 0.0 },
           "travelTimeFromPrevious": "Starting Point",
           "nearbyFood": [{ "name": "string", "rating": 4.5 }]
         }
@@ -390,7 +635,7 @@ Output ONLY valid JSON matching this schema:
 }`;
 
       const aiPromise = ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
           systemInstruction: "You are a backend API. Return ONLY raw JSON without any markdown formatting, conversational filler, or explanation text.",
@@ -427,11 +672,15 @@ Output ONLY valid JSON matching this schema:
           }))
         }));
       }
-      setTripPlan(data);
+
+      const resolvedDestCoords = await geocodePromise;
+      const validatedPlan = await resolveTripCoordinates(data, destination, resolvedDestCoords);
+      setTripPlan(validatedPlan);
       setActiveDay('overview');
     } catch (error) {
       console.warn("AI Generation used intelligent fallback plan:", error);
-      const fallbackPlan = createFallbackTrip(destination, days, travelStyle, preferences);
+      const resolvedDestCoords = await geocodePromise;
+      const fallbackPlan = createFallbackTrip(destination, days, travelStyle, preferences, resolvedDestCoords);
       setTripPlan(fallbackPlan);
       setActiveDay('overview');
     } finally {
@@ -461,7 +710,8 @@ Output ONLY valid JSON matching this schema:
       days: isNaN(formData.days) ? 3 : formData.days,
       travelStyle: formData.travelStyle,
       budgetAmount: formData.budgetAmount,
-      preferences: formData.selectedPrefs.map(id => ALL_PREFERENCES.find(p => p.id === id)?.label || id)
+      preferences: formData.selectedPrefs.map(id => ALL_PREFERENCES.find(p => p.id === id)?.label || id),
+      coords: selectedDestCoords
     });
   };
 
@@ -647,6 +897,7 @@ Output ONLY valid JSON matching this schema:
                       value={formData.destination}
                       onChange={(e) => {
                         setFormData(prev => ({ ...prev, destination: e.target.value }));
+                        setSelectedDestCoords(null);
                         setShowSuggestions(true);
                       }}
                       onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
@@ -665,14 +916,15 @@ Output ONLY valid JSON matching this schema:
                               key={index}
                               type="button"
                               onClick={() => {
-                                setFormData(prev => ({ ...prev, destination: suggestion }));
+                                setFormData(prev => ({ ...prev, destination: suggestion.displayName }));
+                                setSelectedDestCoords({ lat: suggestion.lat, lng: suggestion.lng });
                                 setLocationSuggestions([]);
                                 setShowSuggestions(false);
                               }}
                               className="w-full text-left px-6 py-4 hover:bg-brand-dark transition-colors border-b border-brand-primary/5 last:border-0 flex items-start gap-3 group"
                             >
                               <MapPin className="w-4 h-4 mt-0.5 text-brand-slate group-hover:text-brand-primary transition-colors shrink-0" />
-                              <span className="text-xs md:text-sm font-bold text-brand-heading line-clamp-2">{suggestion}</span>
+                              <span className="text-xs md:text-sm font-bold text-brand-heading line-clamp-2">{suggestion.displayName}</span>
                             </button>
                           ))
                         )}
@@ -1189,6 +1441,7 @@ Output ONLY valid JSON matching this schema:
         <ActivityEditModal 
           activity={editingActivity?.activity || null}
           day={editingActivity?.day || 1}
+          destination={tripPlan?.tripSummary.destination || ''}
           onClose={() => {
             setIsActivityModalOpen(false);
             setEditingActivity(null);
@@ -1208,9 +1461,10 @@ Output ONLY valid JSON matching this schema:
   );
 };
 
-const ActivityEditModal = ({ activity, day, onClose, onSave }: { 
+const ActivityEditModal = ({ activity, day, destination, onClose, onSave }: { 
   activity: Activity | null, 
   day: number, 
+  destination: string,
   onClose: () => void, 
   onSave: (activity: Activity, day: number) => void 
 }) => {
@@ -1230,9 +1484,19 @@ const ActivityEditModal = ({ activity, day, onClose, onSave }: {
     nearbyFood: []
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData, day);
+    let finalActivity = formData;
+    if (!isValidCoord(formData.coordinates) && (formData.location || destination)) {
+      const placeQuery = formData.location
+        ? (destination ? `${formData.location}, ${destination}` : formData.location)
+        : destination;
+      const geocoded = await geocodeLocation(placeQuery);
+      if (geocoded) {
+        finalActivity = { ...formData, coordinates: geocoded };
+      }
+    }
+    onSave(finalActivity, day);
   };
 
   return (
