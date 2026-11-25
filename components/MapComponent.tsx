@@ -46,25 +46,60 @@ const MapBounds: React.FC<{ points: [number, number][] }> = ({ points }) => {
       console.error("MapBounds: map is undefined!");
       return;
     }
-    if (points.length > 0) {
-      const bounds = L.latLngBounds(points);
-      map.fitBounds(bounds, { padding: [100, 100] });
-    }
+
+    const fit = () => {
+      map.invalidateSize();
+      if (points.length === 1) {
+        map.setView(points[0], 14);
+      } else if (points.length > 1) {
+        const bounds = L.latLngBounds(points);
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+      }
+    };
+
+    fit();
+    const timer = setTimeout(fit, 150);
+    return () => clearTimeout(timer);
   }, [points, map]);
 
   return null;
 };
 
+const getValidCoords = (coords?: { lat?: number; lng?: number } | null): [number, number] | null => {
+  if (!coords) return null;
+  const lat = Number(coords.lat);
+  const lng = Number(coords.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat === 0 && lng === 0) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return [lat, lng];
+};
+
 const MapComponent: React.FC<MapComponentProps> = ({ activities, days }) => {
   if (typeof window === 'undefined') return null;
 
-  const allActivities = days 
-    ? days.flatMap(d => d.activities) 
-    : (activities || []);
+  const normalizedDays = days?.map(day => ({
+    ...day,
+    activities: (day.activities || [])
+      .map(a => {
+        const valid = getValidCoords(a.coordinates);
+        return valid ? { ...a, coordinates: { lat: valid[0], lng: valid[1] } } : null;
+      })
+      .filter((a): a is MapActivity => a !== null)
+  }));
+
+  const allActivities: MapActivity[] = normalizedDays
+    ? normalizedDays.flatMap(d => d.activities)
+    : (activities || [])
+        .map(a => {
+          const valid = getValidCoords(a.coordinates);
+          return valid ? { ...a, coordinates: { lat: valid[0], lng: valid[1] } } : null;
+        })
+        .filter((a): a is MapActivity => a !== null);
     
   const points: [number, number][] = allActivities.map(a => [a.coordinates.lat, a.coordinates.lng]);
 
-  if (allActivities.length === 0) {
+  if (points.length === 0) {
     return (
       <div className="w-full h-full bg-brand-dark rounded-[3rem] flex items-center justify-center text-brand-slate/40 font-black uppercase tracking-[0.2em]">
         No coordinates available
@@ -87,8 +122,8 @@ const MapComponent: React.FC<MapComponentProps> = ({ activities, days }) => {
         />
         
         {/* Draw areas and lines for each day */}
-        {days ? (
-          days.map((day, dayIdx) => {
+        {normalizedDays ? (
+          normalizedDays.map((day, dayIdx) => {
             const dayPoints: [number, number][] = day.activities.map(a => [a.coordinates.lat, a.coordinates.lng]);
             const color = DAY_COLORS[dayIdx % DAY_COLORS.length];
             
